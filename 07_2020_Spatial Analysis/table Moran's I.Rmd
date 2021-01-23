@@ -1,0 +1,32 @@
+---
+title: "Untitled"
+output: word_document
+---
+
+```{r }
+library(tidyverse)
+library(lctools)
+
+data(GR.Municipalities)
+data <- GR.Municipalities@data
+
+##Moran's I
+
+I <- moransI(Coords = cbind(data$X, data$Y), Bandwidth = 6, x = data$UnemrT01)
+
+M_I_k <- function(k) {
+  
+  result <- moransI(Coords = cbind(data$X, data$Y), Bandwidth = k, x = data$UnemrT01)
+  
+  return(unlist(result[-1]))
+}
+
+k = c(3, 5, 9, 12, 15, 18, 20, 24, 30)
+
+map(k, M_I_k) %>% 
+  do.call(rbind,.) %>% 
+  data.frame(k, .) %>% 
+  round(digits = 3) %>% 
+  knitr::kable()
+```
+

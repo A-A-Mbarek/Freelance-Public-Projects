@@ -1,0 +1,140 @@
+---
+title: "Mapping Report"
+fig_width: 6
+output:
+  word_document: default
+  html_document: default
+fig_height: 4
+---
+
+```{r include=FALSE}
+library(tidyverse)
+library(lctools)
+library(RColorBrewer)
+```
+
+# Importing Data
+
+The `lctools` package provides The `GR.Municipalities` data. Which is a `SpatialPolygonDataFrame` object. The `data` slot contains the demographic information of the 325 municipalities of Greece.
+
+```{r}
+data(GR.Municipalities)
+data_by_Municipality <- GR.Municipalities@data
+```
+
+# Classes creation for Unemployment Rate
+
+We will use `cut` function to create 6 classes of unemployment rate.
+
+```{r}
+k = 6
+data_by_Municipality$UnemrT_cluster <- cut(data_by_Municipality$UnemrT01, breaks = k)
+table(data_by_Municipality$UnemrT_cluster)
+```
+
+However, the classes breaks provided by the `cut` function are not rounded to integers. We will use some manipulations to round breaks to the nearest integer.
+
+```{r}
+classes_bandwidth <- group_by(data_by_Municipality, UnemrT_cluster) %>% 
+    summarise(min_ban = round(min(UnemrT01)),
+              max_ban = round(max(UnemrT01)))
+
+classes_bandwidth <- c(classes_bandwidth$min_ban, classes_bandwidth$max_ban[k])
+classes_bandwidth
+```
+
+Next, we construct the labels for the classes in the form : $[x,x+1[$ 
+
+```{r}
+class_labels <- paste0("[", classes_bandwidth, ",", lead(classes_bandwidth), "[")
+class_labels <- class_labels[-(k+1)]
+class_labels
+```
+
+
+We will assign municipalities to the new classes according to the new breaks we have constructed.
+
+```{r}
+#Function serving to assign unemployment rate to corresponding class
+cluster_fun <- function(x, Bands, Labels) {
+  k = length(Bands)
+  for (i in 2:k) {
+    if (x >= Bands[i-1] & x < Bands[i])
+      return(Labels[i-1])
+  }
+}
+
+data_by_Municipality <- rowwise(data_by_Municipality) %>% 
+  mutate(class_unemr = cluster_fun(UnemrT01, classes_bandwidth, class_labels),
+         class_unemr = factor(class_unemr, levels = class_labels))
+
+head(data_by_Municipality[c(1:4,11,16)])
+
+```
+
+# Exploring Unemployment Rate classes
+
+Before going to map creation, let's explore the distribution of unemployment rates within classes.
+
+```{r}
+#Custom theme to use for coming plots
+Custom_theme <- theme_bw()+
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        legend.position = "None")
+```
+
+First, let's visualize how many municipalites in each group using bar plot
+```{r fig.align = 'center'}
+table(data_by_Municipality$class_unemr)
+
+ggplot(data_by_Municipality, aes(x = class_unemr, fill = class_unemr))+
+  geom_bar()+
+  Custom_theme+
+  scale_fill_brewer(palette = "Greens")+
+  labs(x = "Classes of Unemployment Rate",
+       y = "Number of Municipalities")
+```
+
+More than half of municipalities have unemployment rates between 4% and 7%. Fewer municipalites have unemployment rates between 13% and 20%.
+
+Boxplots help visualising distribution of unemployment rate within each class.
+
+```{r fig.align = 'center'}
+
+ggplot(data_by_Municipality, aes(fill = class_unemr))+
+  geom_boxplot(aes(y = UnemrT01))+
+  scale_y_continuous(breaks = 0:20)+
+  facet_grid(~class_unemr, scale = "free")+
+  Custom_theme +
+  scale_fill_brewer(palette = "Greens")+
+  theme(axis.text.x = element_blank(),
+        axis.ticks = element_blank())+
+  labs(y = "Unemployment Rate")
+```
+
+
+# Data preparation for mapping
+
+Preparing data for mapping includes assigning polygons in the `sp` object to our data. So that each municipality is represented with a finite number of segments connected to form a closed polygon
+.
+```{r}
+map_data <- fortify(GR.Municipalities, region = "OBJECTID") %>% 
+  mutate(id = as.numeric(id)) %>%
+  left_join(data_by_Municipality, by = c("id" = "OBJECTID"))
+```
+
+
+# Mapping
+
+```{r fig.height= 10, fig.width= 14, fig.align = 'center'}
+map_data %>% 
+  ggplot(aes(long, lat, group = group)) +
+  geom_polygon(color = "gray80", aes(fill = class_unemr)) +
+  scale_fill_brewer(palette = "Greens") +
+  coord_equal() +
+  theme_bw() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+  labs(x= "", y= "", fill= "Class of unemployment rate")
+```
+
