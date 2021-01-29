@@ -1,0 +1,273 @@
+---
+title: "Customer Segmentation"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+```{r include=FALSE}
+library(tidyverse)
+if(!require("RColorBrewer")) install.packages("RColorBrewer")
+if(!require("knitr")) install.packages("knitr")
+if(!require("kableExtra")) install.packages("kableExtra")
+library(RColorBrewer)
+```
+
+```{r include=FALSE}
+#data import, please ensure that the file exists in the WD
+Features_clusters <- read_csv("Clustering_results.csv")
+
+#Set up the color palette
+pal <- brewer.pal("Set2", n = 8)
+```
+
+
+The aim of the project is to build customers segments, where each segment has its own characteristics based on the features we use for this segmentation. We are using what is called in machine learning by « unsupervised learning » to detect patterns in data. In this case study of phone users, we are using Kmeans clustering algorithm, which calculates similarities between all the data rows and groups them to clusters. Clusters are « similar » within them and « dissimilar » between each other.
+
+The features we use here are :
+
+  •	Average call duration
+  
+  •	Average number of calls per day
+  
+  •	Average # SMS per day
+  
+  •	% daytime calls (9am -3pm)
+  
+  •	% evening time calls (6pm-10pm)
+  
+  •	% of weekday calls (Sunday - Thursday)
+  
+  •	% of Friday calls
+  
+  •	% of Saturday calls
+
+# Features extraction methodology
+
+For features extracting or (features engineering), we use the data already processed (not the raw data) with 7 variables. We have used the phone number as a user id for aggregation. The date and the hour of calls/sms help to calculate all the % attributes.
+
+The script for features extraction must run over the entire data to aggregate by user. Since the data are large and processing it once will consume memory, we have split it into nine splits with distinct users, that is we cannot find any user appeared in more than one split of data. The final features data will have one row for each user with the 8 attributes we have mentioned.
+
+Note that the features don’t vary in the same scale, % attributes related to time do vary in the same range of [0,1]. Average number of calls and sms are both integer variables, but may have widely different ranges. Average call duration has its own scale. This difference of scales will be considered in results interpretation.
+
+In order to calculate the similarities between users based on mentioned attributes, the Kmeans algorithm uses scaled data which has united scale for all features. For this purpose, we have rescaled the features data before running the algorithm.
+
+The Kmeans algorithm require the number of clusters as input. The choice of an optimal number of clusters will be done using the elbow method after running Kmeans algorithm many times with different values of number of clusters. The elbow method consists of plotting what is called “total within sum of squares” (which is a measure of similarity within clusters) as a function of number of clusters. The function is intuitively decreasing, since we tend to have more homogenous clusters as long we are considering more clusters. The idea is to choose the number of clusters which our criteria (“total within sum of squares”) does not improve comparing to considering a smaller number of clusters.
+
+```{r echo=FALSE}
+Kmeans_3_15 <- read.csv("Kmeans.csv")
+
+Kmeans_3_15 %>% 
+  ggplot(aes(x = k, y = total_within_ss))+
+  geom_line()+
+  scale_x_continuous(breaks = 3:15)+
+  theme_bw() 
+
+```
+
+
+Our elbow plot suggests to use 8 clusters for our segmentation.
+
+
+# Results
+
+The Kmeans algorithm ends by assigning each user to a cluster. The interpretation of clustering results remains as an analysis task of the distributions of features by cluster, which will give an overall idea of what characterizes each cluster from the other clusters.
+
+First, we start by analyzing the weight or the share of each cluster.
+
+
+## Share of each cluster
+
+```{r echo=FALSE}
+#PIE CHART
+count(Features_clusters, cluster) %>% 
+  mutate(p = round(100*n/sum(n))) %>% 
+  ggplot(aes(x = "", y = p, fill = factor(cluster)))+
+    geom_bar(stat = "identity", color = "grey40")+
+    coord_polar("y")+
+  geom_text(aes(label = paste0(p, "%")),
+            position = position_stack(vjust = 0.5))+
+    scale_fill_manual(values = pal)+
+    theme_bw()+
+    theme(panel.grid = element_blank(), axis.text = element_blank(),
+          legend.position = "bottom", rect = element_blank())+
+    labs(title = "Share of each cluster", x = NULL, y = NULL, fill = "Cluster #")
+```
+
+
+Next, we will go through the average number of calls/sms
+
+## Average number of calls/sms
+
+```{r echo=FALSE}
+clusters_long_avg_calls_sms <- group_by(Features_clusters, cluster) %>%
+  select(V1, avg_calls_day, avg_sms_day, cluster) %>%
+  pivot_longer(-c("V1", "cluster"),
+               names_to = "calls_sms", values_to = "avg_per_day")
+
+ggplot(clusters_long_avg_calls_sms, aes(factor(cluster), avg_per_day, fill = factor(cluster)))+
+  geom_boxplot(alpha = 0.7, color = "grey40")+
+  scale_fill_manual(values = pal)+
+  coord_flip()+
+  facet_wrap(~ factor(calls_sms), scales = "free")+
+  theme_bw()+
+  labs(x = NULL, y = NULL, fill = "Cluster #")+
+  theme(axis.text.y = element_blank())
+
+```
+
+
+
+It seems clearly that the cluster num. 1 (which represents 8% of the total users in the data) regroups users that do higher number of calls per day (higher average number of sms as well) comparing to other users. The difference is pretty clear in the graph.
+
+The cluster num. 8 regroups the users that do not use phone for calls at all. This segment of users represents 4% of all users.
+
+All other six clusters seem to have almost similar distributions of the average number of calls per day. Let’s remove the cluster num. 1 to improve the axis scale:
+
+```{r echo=FALSE}
+#Plot without cluster # 1
+filter(clusters_long_avg_calls_sms, cluster != 1) %>% 
+ggplot(aes(factor(cluster), avg_per_day, fill = factor(cluster)))+
+  geom_boxplot(alpha = 0.7, color = "grey40")+
+  scale_fill_manual(values = pal[-1])+
+  coord_flip()+
+  facet_wrap(~ factor(calls_sms), scales = "free")+
+  theme_bw()+
+  labs(x = NULL, y = NULL, fill = "Cluster #")+
+  theme(axis.text.y = element_blank())
+
+```
+
+
+No significant difference is noted between clusters.
+
+
+## Average call duration
+
+
+```{r echo=FALSE}
+clusters_long_avg_dur <- group_by(Features_clusters, cluster) %>%
+  select(V1, avg_call_duration, cluster)
+
+
+ggplot(clusters_long_avg_dur, aes(factor(cluster), avg_call_duration, fill = factor(cluster)))+
+  geom_boxplot(alpha = 0.7, color = "grey40")+
+  scale_fill_manual(values = pal)+
+  coord_flip()+
+  theme_bw()+
+  labs(y = "Average call duration", x = NULL, fill = "Cluster #")+
+  theme(axis.text.y = element_blank())
+
+```
+
+
+
+
+For the average call duration, the cluster num. 6 is characterized by higher call duration. 4% of users belongs to each cluster.
+
+```{r echo=FALSE}
+#Plot without cluster # 6
+
+filter(clusters_long_avg_dur, cluster != 6) %>% 
+ggplot(aes(factor(cluster), avg_call_duration, fill = factor(cluster)))+
+  geom_boxplot(alpha = 0.7, color = "grey40")+
+  scale_fill_manual(values = pal[-6])+
+  coord_flip()+
+  theme_bw()+
+  labs(y = "Average call duration", x = NULL, fill = "Cluster #")+
+  theme(axis.text.y = element_blank())
+
+```
+
+No significant difference is observed between other clusters.
+
+
+With the three features examined before, only three clusters have specific distributions. Let’s explore the attributes related to calling time (evening, morning, weekday, weekend) to see which distinguish other clusters.
+
+
+## Time-related features
+
+```{r echo=FALSE}
+clusters_long_percent <- group_by(Features_clusters, cluster) %>%
+  select(V1, contains("percent"), cluster) %>% 
+  pivot_longer(-c("V1", "cluster"),
+               names_to = "feature_percent", values_to = "percent")
+
+
+ggplot(clusters_long_percent, aes(factor(cluster), percent, fill = factor(cluster)))+
+  geom_boxplot(alpha = 0.7, color = "grey40")+
+  coord_flip()+
+  scale_fill_manual(values = pal)+
+  facet_wrap(~ factor(feature_percent), scales = "free", nrow = 1)+
+  theme_bw()+
+  theme(axis.text = element_blank(), axis.ticks = element_blank())+
+  labs(y = NULL, x = NULL, fill = "Cluster #")
+
+```
+
+
+
+Cluster num. 1 (8% of total users who make higher average number of calls per day) : This segment tends to make calls during the week (much more than on weekends) with no difference between day and evening.
+
+Cluster num. 2 (only 2% of total users) : make less calls on Saturdays, pretty much calls in evenings than daytime.
+
+Cluster num. 3 (14% of total users) : This segment makes calls very often during the week and rarely on weekends. More often in the evening than during the day.
+
+Cluster num. 4 (24% of total users) : similar to cluster num. 3 in terms of weekend/weekday, but more calls in day than the evening.
+
+Cluster num. 5 (40% of total users) : The segment with the highest share is characterized by the fact that it makes more calls during the week than on weekends, either during the day or in the evening.
+
+Cluster num. 6 (4% of total users who make the longest calls) : They make most of their calls on weekdays, less often on weekend.
+
+Cluster num. 7 (4% of total users) : Those users make rare calls on Fridays, but more often on Saturdays than weekdays.
+
+Cluster num. 8 (4% of total users) : This special segment contains users who don’t use phone for calls.
+ 
+
+To sum up, the following table presents the mean of each feature for each cluster :
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Clusters_summary <- select(Features_clusters, -X1, -V1) %>%   
+  group_by(cluster) %>% 
+  summarise(across(everything(),
+                   list(min = min, max = max, mean = mean, median = median),
+                   .names = "{col}-{fn}")) %>% 
+  pivot_longer(cols = -cluster) %>% 
+  separate(name, into = c("feature", "statistic"), sep = "-") %>% 
+  pivot_wider(names_from = statistic, values_from = value) %>% 
+  select(feature, cluster, min, max, mean, median) %>% 
+  arrange(cluster, feature)
+
+Clusters_share <- count(Features_clusters, cluster) %>%
+  mutate(share = paste0(round(100*n/sum(n),1),"%"))
+
+Clusters_profile <- left_join(Clusters_summary, Clusters_share, by = "cluster") %>% 
+  select(cluster, feature, n, share, min, median, mean, max)
+
+
+
+Clusters_average_by_feature <- select(Clusters_profile, cluster, feature, share, mean) %>% 
+  pivot_wider(id_cols = 1, names_from = feature, values_from = mean) %>% 
+  mutate(across(starts_with("percent"), ~round(., 2)),
+         across(starts_with("avg"), ~round(., 1))) %>% 
+  left_join(Clusters_share) %>% 
+  mutate(cluster = paste0("Segment ", 1:8)) %>%
+  select(Cluster = cluster, share, 2:9)
+
+Features_average <- summarise(Features_clusters, across(everything(), mean)) %>% 
+  select(-c(1:2), -cluster) %>% 
+  mutate(across(starts_with("percent"), ~round(., 2)),
+         across(starts_with("avg"), ~round(., 1))) %>% 
+  mutate(Cluster = "Overall", share = "100%") %>% 
+  select(all_of(names(Clusters_average_by_feature)))
+```
+
+```{r echo=FALSE}
+output <- bind_rows(Features_average, Clusters_average_by_feature)
+names(output) <- stringr::str_replace_all(names(output), "_", " ")
+
+knitr::kable(output, align = "c")
+```
+
+
