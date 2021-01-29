@@ -1,0 +1,379 @@
+---
+title: '**Model Selection**'
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# **1.	Data description**
+
+
+In this analysis, we are working with the Minneapolis Demographic Data 2015, by Neighborhood, from the 2015 American Community Survey.
+
+```{r include=FALSE}
+Minneapolis <- read.csv("MplsDemo.csv")
+```
+
+The dataset contains 84 observations and 7 variables. Each row in the dataset represents a neighborhood, and the variables describe demographic, social, economic and ethnic characteristics.
+
+We seek to explain the fraction of people with a college degree in a neighborhood by different socio-economic and ethnic factors, such as population, fraction of black/white people, household income and poverty level, and also the fraction of foreign-born people.
+
+The response variable would be `collegeGrad`, which designate the estimated fraction with a college degree.
+
+The predictor variables are : `population` for total population ; `black` for fraction of the population estimated to be black ; `white` for fraction of the population estimated to be white ; `foreignBorn` for fraction of the population estimated to be foreign born ; `hhIncome` for estimated median household income ; `poverty` for estimated fraction earning less than twice the poverty level.
+
+
+```{r echo=FALSE}
+summary(Minneapolis)
+```
+
+The statistical summary of the dataset shows the different ranges of variables. We can see different scales, espacially for the total population and the houshold income. The other variables are all fractions between 0 and 1.
+
+```{r echo=FALSE}
+par(mfrow = c(1,2))
+boxplot(Minneapolis$population, main = "boxplot of total population")
+boxplot(Minneapolis$hhIncome, main = "boxplot of household income")
+
+```
+
+The boxplots show that population variable have outlier. It would be better if we transform it to log scale.
+
+```{r include=FALSE}
+Minneapolis$lpopulation <- log(Minneapolis$population)
+```
+
+`lpopulation` variable will designate log(`population`).
+
+```{r echo=FALSE}
+par(mfrow = c(1,2))
+hist(Minneapolis$collegeGrad, main = "Histogram of 'collegeGrade'", xlab = "")
+boxplot(Minneapolis$collegeGrad, main = "Boxplot of 'collegeGrade'")
+```
+
+For the response variable, the histogram and the boxplot show no outliers.
+
+
+# **2.	Methods**
+
+We are interested in exploring which factors have effects on the fraction of people having college degree. We look for the best model that fits the data better. We have six predictors and we need to use the best subset of them to fit the better model.
+
+
+To do this, we apply two methods :
+
+-	*Best subset algorithm*, which suggests the best subset of predictors to be used in the model based different model selection criteria.
+
+-	*Forward stepwise algorithm*, which retain a parsimonious model.
+
+`my_mult_regress` function has been already coded in part I of the project. It will be applied to retain the best predictors according to the algorithms we mentionned.
+
+The function will return three outputs :
+
+-	The first one gives us the optimal value of each selection criteria for each number of predictors.
+
+-	The second output gives the best subset for each optimal selection criteria in the first output.
+
+-	And the third one will be the best subset of predictors obtained from the forward stepwise procedure.
+
+We will use `P = 7` as argument to the function, since we have 6 variables plus the intercept. We will set `al_to_enter = 0.1`, and `al_to_exit = 0.15` as standard values for those arguments.
+
+We will fit our best models and compare them using quality of fit by making actual vs fitted plots, and calculating perfomance metrics like *RMSE* and *MAE* for unseen data (by spliting data into training and testing sets).
+
+$$RMSE = \sqrt{\frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2}$$
+
+$$MAE = \frac{1}{n} \sum_{i=1}^{n} |y_i - \hat{y}_i|$$
+
+```{r function, include=FALSE}
+my_mult_regress <- function(X, Y, P, al_to_enter = 0.1, al_to_exit = 0.15){
+  
+  df <- cbind(X,Y)
+  l_X <- lapply(1:(P-1), function(k) combn(names(X), k))
+  
+  p = 1
+  preds = c("1")
+  
+  for (i in seq_along(l_X))
+    for (j in 1:ncol(l_X[[i]])){
+      p = c(p,i+1)
+      preds = c(preds, paste(l_X[[i]][,j], collapse = "+"))
+    }
+  
+  
+  models_list <- lapply(preds, function(pred) lm(paste0("Y ~ ", pred), data = df))
+  
+  full_m <- lm(Y ~ ., data = df)
+  mse_full_m <- (summary(full_m)$sigma)^2  # MSE of full model
+  
+  model_criterion <- function(model) {
+    
+    model_sum = summary(model)
+    SSE = sum(model_sum$residuals^2)
+    R_sq = model_sum$r.squared
+    R_sq_adj = model_sum$adj.r.squared
+    
+    p = length(coef(model))
+    n = nrow(df)
+    AIC = n*log(SSE) - n*log(n) + 2*p
+    SBC = n*log(SSE) - n*log(n) + log(n)*p
+    
+    mse <- (model_sum$sigma)^2
+    Cp <- (n - p)*mse/mse_full_m - (n - 2*p)
+    
+    p_hat = resid(model)/(1 - lm.influence(model)$hat)
+    press = sum(p_hat^2)
+    
+    return(c("p" = p,
+             "SSE" = SSE,
+             "R_sq" = R_sq,
+             "R_sq_adj" = R_sq_adj,
+             "AIC" = AIC,
+             "SBC" = SBC,
+             "Cp" = Cp,
+             "PRESS" = press))
+  }
+  
+  
+  criterion_list <- lapply(models_list, model_criterion)
+  
+  r = 7
+  criterion_table <- matrix(nrow = length(p), ncol = r+1,
+                            dimnames = list(preds, c("p", "SSE", "R_sq", "R_sq_adj", "AIC", "SBC", "Cp", "PRESS")))
+  
+  
+  for (i in seq_along(p))
+    criterion_table[i,] = criterion_list[[i]]
+  
+  
+  best_subset_table <- matrix(nrow = length(unique(p)), ncol = r+1,
+                              dimnames = list(unique(p), c("p", "SSE", "R_sq", "R_sq_adj", "AIC", "SBC", "Cp", "PRESS")))
+  
+  best_subset_variables = best_subset_table
+  
+  for (i in seq_along(unique(p))){
+    subset_p = criterion_table[criterion_table[,"p"] == i,]
+    best_subset_table[i,1] = i
+    best_subset_variables[i,1] = i
+    for (j in 2:(r+1)){
+      best <- ifelse((j %in% 3:4), max, min)
+      
+      if(is.matrix(subset_p)) {
+        criterion = subset_p[,j]
+        labs = rownames(subset_p)
+      } else {
+        criterion = subset_p[j]
+        labs = names(subset_p)
+      }
+      
+      best_subset_table[i,j] = best(criterion)
+      index = which(criterion == best_subset_table[i,j])
+      best_subset_variables[i,j] = labs[index]
+    }
+  }
+  
+  best_subset_variables[1,-1] = preds[1]
+  best_subset_variables[P,-1] = tail(preds,1)
+  
+  #StepWise function
+  StepWise <- function(X,Y, al_to_enter = 0.1 , al_to_exit = 0.15) {
+    data_env = cbind(Y,X)
+    full_m <- lm(Y ~ ., data = data_env)
+    current <- lm(Y ~ 1, data = data_env)
+    
+    while (TRUE) {
+      # Get the size of the current model.
+      p <- length(coef(current)) # size
+      # Try to drop a term if more than one is left
+      if (p > 1) {
+        # Look for terms that can be dropped based on F tests.
+        to_drop <- drop1(current, test = "F");
+        # Find the term with largest p-value.
+        pmax <- suppressWarnings(max(to_drop[, "Pr(>F)"], na.rm = TRUE));
+        # If the term qualifies, drop the variable.
+        if (pmax > al_to_exit) {
+          # We have a candidate for deletion
+          # Get the name of the variable to drop
+          var_to_drop <- rownames(to_drop)[to_drop[,"Pr(>F)"] == pmax];
+          # If an intercept is present, it will be the first name in the list.
+          # There also could be ties for worst p-value.
+          # Taking the second entry if there is more than one is a safe solution to both issues.
+          if (length(var_to_drop) > 1) {
+            var_to_drop <- var_to_drop[2];
+          }
+          # Modify the formula to drop the chosen variable (by subtracting it from the current formula).
+          f <- formula(current);
+          f <- as.formula(paste(f[2], "~", paste(f[3], var_to_drop, sep = " - ")), env = environment(f));
+          # Fit the modified model and loop.
+          current <- lm(f, data);
+          next;
+        }
+      }
+      # If we get here, we failed to drop a term; try adding one.
+      # Note: add1 throws an error if nothing can be added (current == full), which we trap with tryCatch.
+      to_add <- tryCatch(
+        add1(current, full_m, test = "F"),
+        error = function(e) NULL
+      );
+      if (is.null(to_add)) {
+        # There are no unused variables (or something went splat), so we bail out.
+        break;
+      }
+      # Find the minimum p-value of any term (skipping the terms with no p-value). In case none of the remaining terms have a p-value (true of the intercept and any linearly dependent predictors), suppress warnings about an empty list. The test for a suitable candidate to drop will fail since pmin will be set to infinity.
+      pmin <- suppressWarnings(min(to_add[, "Pr(>F)"], na.rm = TRUE));
+      if (pmin < al_to_enter) {
+        # We have a candidate for addition to the model. Get the variable's name.
+        var_to_add <- rownames(to_add)[to_add[,"Pr(>F)"] == pmin];
+        # We have the same issue with ties and the presence of an intercept term, and the same solution, as above.
+        if (length(var_to_add) > 1) {
+          var_to_add <- var_to_add[2];
+        }
+        # Add it to the current formula.
+        f <- formula(current);
+        f <- as.formula(paste(f[2], "~", paste(f[3], var_to_add, sep = " + ")), env = environment(f));
+        # Fit the modified model and loop.
+        current <- lm(f, data = data_env);
+        next;
+      }
+      # If we get here, we failed to make any changes to the model; time to declare victory and exit.
+      break;
+    }
+    
+    return(names(coef(current))[-1])
+    
+  }
+  
+  
+  return(list(output_a = best_subset_table,
+              output_b = best_subset_variables,
+              output_c = StepWise(X,Y, al_to_enter, al_to_exit)))
+}
+
+```
+
+
+# **3.	Results and conclusions**
+
+The first output of the function is given in the following table :
+
+```{r include=FALSE}
+Y <- Minneapolis$collegeGrad
+X <- Minneapolis[c(4:8,10)]
+output <- my_mult_regress(X, Y, P = 7, al_to_enter = 0.1, al_to_exit = 0.15)
+```
+
+```{r echo=FALSE}
+knitr::kable(round(output$output_a, 3))
+```
+
+We can see clearly that the models that optimize most criteria are those with 5 parameters (4 variables).
+
+To see which subsets of variables are used we need to explore the second input for value of p = 5 :
+
+```{r echo=FALSE}
+output$output_b[5,-1]
+
+```
+
+This gives one single subset of predictors : ${$`white`, `black`, `foreignBorn`, `hhIncome`$}$.
+
+We use this subset of variables to fit the first model (which will designate the model obtained from best subset algorithm).
+
+```{r}
+model_best_subset <- lm(collegeGrad ~ white + black + foreignBorn + hhIncome, data = Minneapolis)
+```
+
+
+Now, let's check what Stepwise procedure will retain as the best predictors : 
+
+
+```{r echo=FALSE}
+output$output_c
+```
+
+
+The third output of the function return a subset containing three variables : `white`, `foreignBorn`, `hhIncome.` We use this other subset to fit the second model (which will designate the model obtained from forward stepwise procedure).
+
+```{r}
+model_stepwise <- lm(collegeGrad ~ white + foreignBorn + hhIncome, data = Minneapolis)
+```
+
+```{r echo=FALSE}
+par(mfrow = c(1,2))
+hist(residuals(model_best_subset), xlab = "",
+     main = "Residuals of the 'Best Subset' model")
+hist(residuals(model_stepwise), xlab = "",
+     main = "Residuals of the 'Stepwise' model")
+
+```
+
+If we take a look at the histograms of residuals, we can judge how the model has slightly better distribution than the second model.
+
+```{r echo=FALSE}
+par(mfrow = c(1,2))
+plot(Y, fitted(model_best_subset))
+abline(a = c(0,1), col = "red")
+
+plot(Y, fitted(model_stepwise))
+abline(a = c(0,1), col = "red")
+```
+
+
+The fitted vs. actual plots make hard to compare the models.
+
+We can also compare models based on their predictive performance on unseen data. We fit our models again on 80% of the data and predict the remaining 20%, then calculating errors and performance metrics (*RMSE* and *MAE*)
+
+```{r echo=FALSE}
+n = nrow(Minneapolis)
+set.seed(280818)
+smpl_ind <- sample(n, 0.2*n)
+train_data <- Minneapolis[-smpl_ind, ]
+test_data <- Minneapolis[smpl_ind, ]
+
+model_best_subset <- lm(collegeGrad ~ white + black + foreignBorn + hhIncome, data = train_data)
+model_stepwise <- lm(collegeGrad ~ white + foreignBorn + hhIncome, data = train_data)
+
+Y_hat_best_subset <- predict(model_best_subset, test_data)
+Y_hat_stepwise <- predict(model_stepwise, test_data)
+
+RMSE_best_subset = sqrt(sum((test_data$collegeGrad - Y_hat_best_subset)^2))
+RMSE_stepwise = sqrt(sum((test_data$collegeGrad - Y_hat_stepwise)^2))
+
+MAE_best_subset = mean(abs(test_data$collegeGrad - Y_hat_best_subset))
+MAE_stepwise = mean(abs(test_data$collegeGrad - Y_hat_stepwise))
+
+res <- data.frame(Model = c("Best subset algorithm", "Stepwise procedure"),
+           RMSE = round(c(RMSE_best_subset, RMSE_stepwise), 3),
+           MAE = round(c(MAE_best_subset, MAE_stepwise), 3))
+
+knitr::kable(res)
+```
+
+
+Both metrics are better for the first model than the second model, which means that the model obtained from best subset procedure has the best predictive performance comparing to the stepwise procedure’s outcome.
+
+
+# **4.	Discussion and justification**
+
+From the view of quality of fit, the first model seems to fit data better. In other hand, the second model is a parsimonious model, all variables are highly significants.
+
+```{r echo=FALSE}
+model_stepwise <- lm(collegeGrad ~ white + foreignBorn + hhIncome, data = Minneapolis)
+
+knitr::kable(summary(model_stepwise)$coefficients)
+```
+
+The interpretation of the `estimate` should take into consideration the units of measurments of variables.
+
+`white` and `foreignBorn` variables are fractions between 0 and 1. That means that, all else being equal, increasing the fraction of white people in a neighborhoud with 10%, will increase the fraction of college graded by 6.77%, on average. Similarly, increasing the fraction of foreign born people in a neighborhoud with 10%, will increase the fraction of college graded by 4.91%, on average.
+
+The effect of `hhIncome` variable (the median household income) is interpreted as follows : all else being equal, if a neighbourhood has recored an increase in the median houshold income by 10,000 units, that would increase the fraction of college graded people by 2.4% on average.
+
+
+The choice between the models depends on what we want to do with it, if we are interested in estimating the effects of significant factors on the response, we need to consider the second model.
+
+If we need a predictive model, then the first model which is much better in predicting unseen data would be the best choice.
+
+
+
+
+
+
